@@ -15,6 +15,10 @@ import copy
 from scipy.spatial.transform import Rotation
 import tempfile
 import shutil
+import json
+from collections import OrderedDict
+from array import array
+import cv2
 
 from mast3r.cloud_opt.sparse_ga import sparse_global_alignment
 from mast3r.cloud_opt.tsdf_optimizer import TSDFPostProcess
@@ -27,7 +31,7 @@ from dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL, pts3d_to_trimesh, cat_
 from dust3r.demo import get_args_parser as dust3r_get_args_parser
 
 import matplotlib.pyplot as pl
-
+from camera_conversion import Cameras
 
 class SparseGAState():
     def __init__(self, sparse_ga, should_delete=False, cache_dir=None, outfile_name=None):
@@ -79,6 +83,7 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
         col = np.concatenate([p[m] for p, m in zip(imgs, mask)]).reshape(-1, 3)
         valid_msk = np.isfinite(pts.sum(axis=1))
         pct = trimesh.PointCloud(pts[valid_msk], colors=col[valid_msk])
+        pct.export(os.path.join("./", 'sparse_pc.ply'))
         scene.add_geometry(pct)
     else:
         meshes = []
@@ -106,8 +111,7 @@ def _convert_scene_output_to_glb(outfile, imgs, pts3d, mask, focals, cams2world,
         print('(exporting 3D scene to', outfile, ')')
     scene.export(file_obj=outfile)
     return outfile
-
-
+          
 def get_3D_model_from_scene(silent, scene_state, min_conf_thr=2, as_pointcloud=False, mask_sky=False,
                             clean_depth=False, transparent_cams=False, cam_size=0.05, TSDF_thresh=0):
     """
@@ -124,7 +128,10 @@ def get_3D_model_from_scene(silent, scene_state, min_conf_thr=2, as_pointcloud=F
     rgbimg = scene.imgs
     focals = scene.get_focals().cpu()
     cams2world = scene.get_im_poses().cpu()
-
+    
+    # Get camera poses
+    make_nerf_transform_matrix_json(scene)
+    
     # 3D pointcloud from depthmap, poses and intrinsics
     if TSDF_thresh > 0:
         tsdf = TSDFPostProcess(scene, TSDF_thresh=TSDF_thresh)
@@ -212,14 +219,42 @@ def set_scenegraph_options(inputfiles, win_cyclic, refid, scenegraph_type):
                           maximum=num_files - 1, step=1, visible=scenegraph_type == 'oneref')
     return win_col, winsize, win_cyclic, refid
 
+def make_nerf_transform_matrix_json(scene):
+    # Get original image height and width
+    img = cv2.imread(scene.img_paths[0])
+    h = img.shape[0]
+    w = img.shape[1] 
+    
+    # Calculate scale
+    scale = w/scene.imgs[0].shape[1]
 
+    intrinsics = scene.get_intrinsics().cpu()*scale # Get intrinsic matrix
+    cams2world = scene.get_im_poses().cpu().numpy() # Get external matrix
+
+    # Convert to Nerf Studio Format
+    extrinsics = [] 
+    for i, ext in enumerate(to_numpy(cams2world)):
+        ext[:3, 3:] *= 1
+        extrinsics.append((ext @ OPENGL).tolist())
+    
+    fx =  intrinsics[i][0][0].item(),  
+    fy =  intrinsics[i][1][1].item(),
+    cx = intrinsics[0][0][2].item()
+    cy = intrinsics[0][1][2].item()
+    
+    camera_poses = Cameras(fx, fy, cx, cy, extrinsics, w, h)
+    camera_poses.export(scene.img_paths)
+
+        
 def main_demo(tmpdirname, model, device, image_size, server_name, server_port, silent=False,
-              share=False, gradio_delete_cache=False):
+              share=True, gradio_delete_cache=False):
+
     if not silent:
         print('Outputing stuff in', tmpdirname)
 
     recon_fun = functools.partial(get_reconstructed_scene, tmpdirname, gradio_delete_cache, model, device,
                                   silent, image_size)
+    
     model_from_scene_fun = functools.partial(get_3D_model_from_scene, silent)
 
     def get_context(delete_cache):
