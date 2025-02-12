@@ -340,7 +340,7 @@ def main(mtred_folder, output_folder, mast3r_folder):
 if __name__ == "__main__":
     MTRED_PATH = "PATH_TO_MTRED"
     OUTPUT_PATH = "PATH_TO_OUTPUT_DIRECTORY"
-    MAST3R_PATH = "PATH_TO_MAST3R_PARENT_DRIECTORY"
+    MAST3R_PATH = "PATH_TO_mast3r_modified"
     main(MTRED_PATH, OUTPUT_PATH, MAST3R_PATH)
 
 
